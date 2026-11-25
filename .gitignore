@@ -48,3 +48,6 @@ app.*.map.json
 # so does not cover the Android module's own build directory.
 /android/build/
 /android/.gradle/
+
+# Local documentation (not tracked)
+docs/
