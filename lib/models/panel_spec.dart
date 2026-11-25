@@ -138,6 +138,54 @@ const Map<String, PanelSpec> panelPresets = {
     watts: 330, vmpp: 37.2, impp: 8.87, voc: 45.9, isc: 9.35, areaM2: 1.94,
     powerTempCoeffPct: -0.41,
   ),
+
+  // ------------------------------------- 210 mm n-type TOPCon, 132 half-cell
+  //
+  // Class-representative values. VERIFY against the datasheet of whichever
+  // module Chapter 3 actually cites — the same warning as the rows above.
+  //
+  // Three things separate these from everything else in this map, and all
+  // three change the sizing result:
+  //
+  //  1. powerTempCoeffPct is -0.30, not the -0.45 default. That default is
+  //     correct for the p-type mono above and wrong for n-type TOPCon. At the
+  //     63 degC cell temperature the NOCT method gives for Lagos, the derate
+  //     is 0.885 rather than 0.828 — about +6.9% per module, so leaving the
+  //     default would understate these by roughly half a module in every ten.
+  //  2. Cold Voc is high enough to constrain strings. An 800 W module reaches
+  //     57.7 V cold, so a 100 V controller takes exactly one of them, and
+  //     three in series (173 V) already needs the 250 V class.
+  //  3. Isc near 19 A doubles string protection (16 A -> 32 A) and takes
+  //     string cable from 1.5 mm2 to 4 mm2.
+  //
+  // Practical note for the write-up: these are ~2.4 m x 1.3 m and ~38 kg.
+  // That is commercial hardware on a domestic roof, and the roof-fit check
+  // matters far more here than it does for the 300 W module.
+  '630W Mono (210 n-type TOPCon)': PanelSpec(
+    name: '630W Mono (210 n-type)',
+    watts: 630, vmpp: 34.9, impp: 18.05, voc: 41.6, isc: 19.20, areaM2: 3.10,
+    powerTempCoeffPct: -0.30,
+  ),
+  '650W Mono (210 n-type TOPCon)': PanelSpec(
+    name: '650W Mono (210 n-type)',
+    watts: 650, vmpp: 35.5, impp: 18.31, voc: 42.2, isc: 19.40, areaM2: 3.10,
+    powerTempCoeffPct: -0.30,
+  ),
+  '700W Mono (210 n-type TOPCon)': PanelSpec(
+    name: '700W Mono (210 n-type)',
+    watts: 700, vmpp: 38.7, impp: 18.09, voc: 46.2, isc: 19.10, areaM2: 3.11,
+    powerTempCoeffPct: -0.30,
+  ),
+  '750W Mono (210 n-type TOPCon)': PanelSpec(
+    name: '750W Mono (210 n-type)',
+    watts: 750, vmpp: 41.5, impp: 18.10, voc: 49.3, isc: 19.20, areaM2: 3.11,
+    powerTempCoeffPct: -0.30,
+  ),
+  '800W Mono (210 n-type TOPCon)': PanelSpec(
+    name: '800W Mono (210 n-type)',
+    watts: 800, vmpp: 43.7, impp: 18.30, voc: 51.5, isc: 19.40, areaM2: 3.20,
+    powerTempCoeffPct: -0.30,
+  ),
 };
 
 PanelSpec get defaultPanel => panelPresets['300W Mono (60-cell)']!;

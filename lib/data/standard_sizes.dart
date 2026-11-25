@@ -73,12 +73,27 @@ double ambientAmpacityFactor(double ambientC) {
 const double copperResistivity = 0.0175;
 
 /// Round a value up to the next entry in a list of standard sizes.
+///
+/// When the demand exceeds every stocked size these functions return the
+/// largest one, which is the only sane value to return but is NOT a solution
+/// to the problem asked. Pair every call that can be driven by user load with
+/// the matching `exceeds...` predicate below and raise a warning, or the
+/// result is a confident bill of materials for a system that cannot be built.
+///
+/// This is the same failure the controller sizing already guards against by
+/// splitting the array across parallel units rather than rounding up to
+/// `standardControllerA.last` — see SizingService step 7.
 int nextStandard(List<int> sizes, double value) {
   for (final s in sizes) {
     if (s >= value) return s;
   }
   return sizes.last;
 }
+
+/// True when [value] is past the largest stocked size and [nextStandard]
+/// therefore clamped instead of rounding up.
+bool exceedsStandard(List<int> sizes, double value) =>
+    sizes.isNotEmpty && value > sizes.last;
 
 double nextStandardCable(double mm2) {
   for (final s in standardCableMm2) {
@@ -87,6 +102,8 @@ double nextStandardCable(double mm2) {
   return standardCableMm2.last;
 }
 
+bool exceedsStandardCable(double mm2) => mm2 > standardCableMm2.last;
+
 /// Smallest standard conductor able to carry [amps] at [ambientC].
 double cableForAmpacity(double amps, {double ambientC = 40}) {
   final factor = ambientAmpacityFactor(ambientC);
@@ -94,6 +111,15 @@ double cableForAmpacity(double amps, {double ambientC = 40}) {
     if ((cableAmpacity[s] ?? 0) * factor >= amps) return s;
   }
   return standardCableMm2.last;
+}
+
+/// True when no stocked conductor can carry [amps] at [ambientC] — a single
+/// run is not enough and the circuit needs parallel conductors or a higher
+/// system voltage.
+bool exceedsAmpacity(double amps, {double ambientC = 40}) {
+  final factor = ambientAmpacityFactor(ambientC);
+  final largest = cableAmpacity[standardCableMm2.last] ?? 0;
+  return largest * factor < amps;
 }
 
 // ---------------------------------------------------------------- unit costs

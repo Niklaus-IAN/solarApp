@@ -125,13 +125,43 @@ class Appliance {
       );
 }
 
-/// Library entry the user picks from. Wattage ranges are stored so the UI can
-/// offer a slider; [typicalWatts] is the midpoint default.
+/// One selectable size within a stepped preset family.
+///
+/// The label is what the user recognises on the nameplate, which is not always
+/// a wattage: fans step in watts, televisions in screen diagonal, air
+/// conditioners in horsepower. Keeping label and watts separate means the
+/// picker can say `55"` while the engine still receives 100 W.
+class ApplianceStep {
+  final String label;
+  final double watts;
+
+  const ApplianceStep(this.label, this.watts);
+}
+
+/// Library entry the user picks from.
+///
+/// Two shapes:
+///
+///  * The plain constructor is a single appliance with a wattage range;
+///    [typicalWatts] is the midpoint. This is how all the CED R08-002 entries
+///    are written and none of them changed.
+///  * [AppliancePreset.stepped] is a *family* — one entry standing for a
+///    ladder of discrete market sizes. The picker shows one chip for the
+///    family and opens a sheet of [steps], instead of one chip per size.
+///    Without this a 12-step standing-fan ladder is twelve near-identical
+///    chips in the Cooling category.
 class AppliancePreset {
   final String name;
   final String category;
-  final double minWatts;
-  final double maxWatts;
+  final double _minW;
+  final double _maxW;
+
+  /// Discrete sizes. Empty for a plain (non-stepped) preset.
+  final List<ApplianceStep> steps;
+
+  /// Which step the sheet preselects — the size most people actually own.
+  final int defaultStepIndex;
+
   final double dutyCycle;
   final double surgeFactor;
   final LoadType loadType;
@@ -140,21 +170,64 @@ class AppliancePreset {
   const AppliancePreset(
     this.name,
     this.category,
-    this.minWatts,
-    this.maxWatts, {
+    double minWatts,
+    double maxWatts, {
     this.dutyCycle = 1.0,
     this.surgeFactor = 1.0,
     this.loadType = LoadType.ac,
     this.defaultHours = 4,
-  });
+  })  : _minW = minWatts,
+        _maxW = maxWatts,
+        steps = const [],
+        defaultStepIndex = 0;
 
-  double get typicalWatts => (minWatts + maxWatts) / 2;
-  bool get isRange => maxWatts > minWatts;
+  const AppliancePreset.stepped(
+    this.name,
+    this.category,
+    this.steps, {
+    this.defaultStepIndex = 0,
+    this.dutyCycle = 1.0,
+    this.surgeFactor = 1.0,
+    this.loadType = LoadType.ac,
+    this.defaultHours = 4,
+  })  : _minW = 0,
+        _maxW = 0;
 
-  Appliance toAppliance(String id, {double? watts, int quantity = 1, double? hours}) {
+  bool get isStepped => steps.isNotEmpty;
+
+  double get minWatts => isStepped
+      ? steps.map((s) => s.watts).reduce((a, b) => a < b ? a : b)
+      : _minW;
+
+  double get maxWatts => isStepped
+      ? steps.map((s) => s.watts).reduce((a, b) => a > b ? a : b)
+      : _maxW;
+
+  /// Default step for a family, midpoint of the range otherwise.
+  double get typicalWatts =>
+      isStepped ? steps[_safeIndex].watts : (_minW + _maxW) / 2;
+
+  ApplianceStep? get defaultStep => isStepped ? steps[_safeIndex] : null;
+
+  int get _safeIndex =>
+      defaultStepIndex >= 0 && defaultStepIndex < steps.length
+          ? defaultStepIndex
+          : 0;
+
+  bool get isRange => !isStepped && _maxW > _minW;
+
+  /// Build a load line. [stepLabel] is appended to the name so the load list
+  /// and the exported bill of materials both say which size was chosen.
+  Appliance toAppliance(
+    String id, {
+    double? watts,
+    int quantity = 1,
+    double? hours,
+    String? stepLabel,
+  }) {
     return Appliance(
       id: id,
-      name: name,
+      name: stepLabel == null ? name : '$name $stepLabel',
       watts: watts ?? typicalWatts,
       quantity: quantity,
       hoursPerDay: hours ?? defaultHours,

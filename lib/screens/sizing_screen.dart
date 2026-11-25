@@ -42,10 +42,231 @@ class _SizingScreenState extends State<SizingScreen> {
   PanelSpec get _panel => panelPresets[_panelKey]!;
 
   void _addPreset(AppliancePreset preset) {
+    if (preset.isStepped) {
+      _showStepPicker(preset);
+      return;
+    }
     setState(() {
       _appliances.add(preset.toAppliance('a${_idCounter++}'));
     });
   }
+
+  /// Size-and-quantity sheet for a stepped family.
+  ///
+  /// Quantity lives here rather than on the load list because adding six bulbs
+  /// otherwise means six taps and six identical rows, even though
+  /// Appliance.quantity has always existed.
+  Future<void> _showStepPicker(AppliancePreset preset) async {
+    var stepIndex = preset.defaultStepIndex;
+    if (stepIndex < 0 || stepIndex >= preset.steps.length) stepIndex = 0;
+    var quantity = 1;
+
+    // Colour and shape go on the sheet itself, not on a child. A transparent
+    // sheet with an opaque Container inside works only for as long as that
+    // Container covers every pixel, and anywhere it falls short is a hole
+    // through to the screen behind rather than a gap in a surface.
+    final confirmed = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: AppTheme.cardBackground,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+        side: BorderSide(color: AppTheme.cardBorder),
+      ),
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final step = preset.steps[stepIndex];
+            final dailyWh = step.watts *
+                quantity *
+                preset.defaultHours *
+                preset.dutyCycle;
+            final surgeExtra =
+                step.watts * quantity * (preset.surgeFactor - 1.0);
+
+            return Padding(
+              // viewInsets keeps the sheet clear of the keyboard; viewPadding
+              // clears the home indicator, which the sheet extends underneath.
+              padding: EdgeInsets.only(
+                left: 18,
+                right: 18,
+                top: 12,
+                bottom: MediaQuery.of(sheetContext).viewInsets.bottom +
+                    MediaQuery.of(sheetContext).viewPadding.bottom +
+                    22,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 3,
+                      decoration: BoxDecoration(
+                        color: AppTheme.textMuted,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(preset.name,
+                      style: const TextStyle(
+                          color: AppTheme.textPrimary,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 3),
+                  Text(
+                    preset.loadType == LoadType.dc
+                        ? 'DC load — bypasses the inverter'
+                        : 'Pick the rating on the nameplate',
+                    style: const TextStyle(
+                        color: AppTheme.textSecondary, fontSize: 12),
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children:
+                        List.generate(preset.steps.length, (i) {
+                      final active = i == stepIndex;
+                      return ChoiceChip(
+                        label: Text(preset.steps[i].label),
+                        selected: active,
+                        onSelected: (_) =>
+                            setSheetState(() => stepIndex = i),
+                        backgroundColor: AppTheme.primaryMid,
+                        selectedColor:
+                            AppTheme.accentBlue.withOpacity(0.25),
+                        labelStyle: TextStyle(
+                            color: active
+                                ? AppTheme.accentBlue
+                                : AppTheme.textPrimary,
+                            fontSize: 12,
+                            fontWeight: active
+                                ? FontWeight.w700
+                                : FontWeight.w400),
+                        side: BorderSide(
+                            color: active
+                                ? AppTheme.accentBlue
+                                : AppTheme.cardBorder),
+                      );
+                    }),
+                  ),
+                  const SizedBox(height: 18),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('How many',
+                          style: TextStyle(
+                              color: AppTheme.textSecondary, fontSize: 13)),
+                      Row(
+                        children: [
+                          IconButton(
+                            onPressed: quantity > 1
+                                ? () => setSheetState(() => quantity--)
+                                : null,
+                            icon: const Icon(Icons.remove_circle_outline),
+                            color: AppTheme.accentBlue,
+                            disabledColor: AppTheme.textMuted,
+                            iconSize: 22,
+                          ),
+                          SizedBox(
+                            width: 28,
+                            child: Text('$quantity',
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                    color: AppTheme.textPrimary,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700)),
+                          ),
+                          IconButton(
+                            onPressed: quantity < 99
+                                ? () => setSheetState(() => quantity++)
+                                : null,
+                            icon: const Icon(Icons.add_circle_outline),
+                            color: AppTheme.accentBlue,
+                            iconSize: 22,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  // Show the energy before the load is committed. A wrong duty
+                  // cycle or hours figure is obvious here and invisible later.
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primaryMid,
+                      border: Border.all(color: AppTheme.cardBorder),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$quantity × ${step.watts.toStringAsFixed(0)} W × '
+                          '${_trimNum(preset.defaultHours)} h'
+                          '${preset.dutyCycle < 1.0 ? ' × duty ${preset.dutyCycle.toStringAsFixed(2)}' : ''}',
+                          style: GoogleFonts.robotoMono(
+                              color: AppTheme.textSecondary, fontSize: 11),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          '= ${dailyWh.toStringAsFixed(0)} Wh/day'
+                          '${surgeExtra > 0 ? '   ·   surge +${surgeExtra.toStringAsFixed(0)} W' : ''}',
+                          style: GoogleFonts.robotoMono(
+                              color: AppTheme.accentGreen,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(sheetContext, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.accentBlue,
+                        foregroundColor: AppTheme.primaryDark,
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: const Text('Add to load list',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w700, fontSize: 13)),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    if (confirmed == true && mounted) {
+      final step = preset.steps[stepIndex];
+      setState(() {
+        _appliances.add(preset.toAppliance(
+          'a${_idCounter++}',
+          watts: step.watts,
+          quantity: quantity,
+          stepLabel: step.label,
+        ));
+      });
+    }
+  }
+
+  /// 8.0 -> "8", 0.25 -> "0.25". Hours are doubles but usually whole.
+  static String _trimNum(double v) =>
+      v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString();
 
   void _removeAppliance(int index) {
     setState(() => _appliances.removeAt(index));
@@ -214,12 +435,35 @@ class _SizingScreenState extends State<SizingScreen> {
           spacing: 8,
           runSpacing: 8,
           children: presets.map((preset) {
+            // A stepped family shows how many sizes are behind it rather than
+            // a wattage, so the user knows a sheet is coming. Plain presets
+            // keep the original label and add immediately.
             return ActionChip(
-              label: Text('${preset.name} (${preset.typicalWatts.toStringAsFixed(0)}W)'),
+              label: preset.isStepped
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(preset.name,
+                            style: const TextStyle(
+                                color: AppTheme.textPrimary, fontSize: 12)),
+                        const SizedBox(width: 5),
+                        Text('${preset.steps.length} ›',
+                            style: const TextStyle(
+                                color: AppTheme.accentBlue,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
+                      ],
+                    )
+                  : Text(
+                      '${preset.name} (${preset.typicalWatts.toStringAsFixed(0)}W)'),
               onPressed: () => _addPreset(preset),
               backgroundColor: AppTheme.cardBackground,
-              labelStyle: const TextStyle(color: AppTheme.textPrimary, fontSize: 12),
-              side: const BorderSide(color: AppTheme.cardBorder),
+              labelStyle:
+                  const TextStyle(color: AppTheme.textPrimary, fontSize: 12),
+              side: BorderSide(
+                  color: preset.isStepped
+                      ? AppTheme.accentBlue.withOpacity(0.45)
+                      : AppTheme.cardBorder),
             );
           }).toList(),
         ),

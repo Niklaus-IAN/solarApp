@@ -1,8 +1,22 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- BLE Permissions -->
+    <!-- BLE Permissions.
+         flutter_blue_plus ships a deliberately empty manifest, so everything
+         Bluetooth needs has to be declared here.
+
+         Android 12+ (API 31+): the runtime "Nearby devices" pair. neverForLocation
+         asserts we don't derive location from BLE, so no location grant is needed. -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!-- Android 11 and older (API <= 30): the two permissions above do not exist.
+         These legacy install-time permissions are what actually authorise using the
+         adapter, and ACCESS_FINE_LOCATION is what gates a BLE *scan*. Without them
+         a scan fails on every pre-12 device no matter what the user grants.
+         Capped at 30 so Android 12+ builds don't request location at all. -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     <application
         android:label="solar_app"

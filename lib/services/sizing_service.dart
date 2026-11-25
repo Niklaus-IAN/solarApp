@@ -380,6 +380,11 @@ class SizingService {
       designPsh: designPsh,
       avgPsh: avgPsh,
       largestMotorName: largestMotorName,
+      inverterMinimum: inverterMinimum,
+      inverterW: inverterW,
+      requiredSurgeW: requiredSurgeW,
+      runningLoadW: runningLoadW,
+      cableRuns: cableRuns,
     ));
 
     // ========================================================= STEP 11: COST
@@ -582,8 +587,67 @@ class SizingService {
     required double designPsh,
     required double avgPsh,
     required String? largestMotorName,
+    required double inverterMinimum,
+    required int inverterW,
+    required double requiredSurgeW,
+    required double runningLoadW,
+    required List<CableRun> cableRuns,
   }) {
     final w = <SizingWarning>[];
+
+    // Demand past the end of the catalogue.
+    //
+    // nextStandard returns the largest stocked size when nothing satisfies the
+    // requirement, which reads as a valid answer and is not one. Until the
+    // library gained 10 HP air conditioning and 10 kW heating elements no load
+    // could reach this, so it never fired. It can now.
+    if (exceedsStandard(standardInverterW, inverterMinimum)) {
+      w.add(SizingWarning(
+        WarningLevel.critical,
+        'Beyond single-phase inverter range',
+        'This load needs at least '
+            '${inverterMinimum.toStringAsFixed(0)} W of continuous inverter '
+            'capacity (${runningLoadW.toStringAsFixed(0)} W running, '
+            '${requiredSurgeW.toStringAsFixed(0)} W peak). The largest '
+            'standard single-phase unit is ${standardInverterW.last} W, and '
+            'that is what the bill of materials below shows — it will not '
+            'carry this design.',
+        action: 'Loads of this size need a three-phase supply and are outside '
+            'what this tool sizes. Remove the largest load, or treat the '
+            'result as indicative only.',
+      ));
+    }
+
+    for (final r in cableRuns) {
+      if (exceedsAmpacity(r.amps, ambientC: input.cableAmbientC)) {
+        w.add(SizingWarning(
+          WarningLevel.critical,
+          'No single conductor can carry: ${r.label}',
+          'This run carries ${r.amps.toStringAsFixed(0)} A. The largest '
+              'stocked conductor (${standardCableMm2.last.toStringAsFixed(0)} '
+              'mm2) tops out below that at '
+              '${input.cableAmbientC.toStringAsFixed(0)} degC ambient, so the '
+              'size shown is the catalogue maximum rather than a sufficient '
+              'one.',
+          action: 'Raise the system voltage to cut the current, or run '
+              'parallel conductors and fuse each one.',
+        ));
+      }
+    }
+
+    if (exceedsStandard(
+        standardBreakerA, batteryToInverterA * _continuousFactor)) {
+      w.add(SizingWarning(
+        WarningLevel.critical,
+        'Beyond standard overcurrent protection',
+        'The battery isolator needs '
+            '${(batteryToInverterA * _continuousFactor).toStringAsFixed(0)} A. '
+            'The largest breaker in the catalogue is '
+            '${standardBreakerA.last} A.',
+        action: 'Raise the system voltage. Current falls in proportion, and '
+            'losses fall with its square.',
+      ));
+    }
 
     // Roof area. Lecture 15 recommends budgeting 100-120 W/m2 of usable roof
     // rather than raw module area, to leave room for penetrations, walkways

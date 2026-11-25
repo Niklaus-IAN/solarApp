@@ -74,6 +74,7 @@ class BleService extends ChangeNotifier {
   bool _uptimeStalled = false;
   bool _intentionalDisconnect = false;
   int _reconnectAttempts = 0;
+  bool _permissionsPermanentlyDenied = false;
 
   final _readings = StreamController<SensorData>.broadcast();
 
@@ -114,33 +115,73 @@ class BleService extends ChangeNotifier {
 
   // ===== PERMISSIONS =====
 
-  /// Android 12+ requires BLUETOOTH_SCAN / BLUETOOTH_CONNECT to be granted at
-  /// runtime. Declaring them in the manifest is not enough — without this the
-  /// scan returns an empty list and reports no error, which looks exactly like
-  /// "the device isn't advertising".
+  /// Which runtime permission actually gates a BLE scan depends on the Android
+  /// version, and the two cases are mutually exclusive:
+  ///
+  ///   * **Android 12+ (API 31+)** — BLUETOOTH_SCAN / BLUETOOTH_CONNECT. The
+  ///     manifest declares `neverForLocation`, so no location grant is needed.
+  ///   * **Android 11 and older** — those two permissions *do not exist*.
+  ///     permission_handler finds no matching manifest entry and returns
+  ///     `denied` for both **without ever showing a dialog**
+  ///     (`PermissionManager.requestPermissions`, empty-names branch). There,
+  ///     BLE scanning is gated on ACCESS_FINE_LOCATION instead.
+  ///
+  /// Gating on the Bluetooth grants alone therefore made scanning impossible on
+  /// every Android 11-or-older device, while telling the user to go and enable
+  /// a "Nearby devices" permission the system never offers them.
   Future<bool> _ensurePermissions() async {
     if (kIsWeb) return true;
 
-    final statuses = await [
+    // Phase 1 — the modern path. If this succeeds we never prompt for location.
+    final bt = await [
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
-      Permission.locationWhenInUse,
     ].request();
+    final scan = bt[Permission.bluetoothScan];
+    final connect = bt[Permission.bluetoothConnect];
 
-    // locationWhenInUse is only required on Android < 12 for BLE scanning; on
-    // iOS and Android 12+ with neverForLocation it may report as denied while
-    // scanning still works. Gate on the Bluetooth grants only.
-    final scanOk = statuses[Permission.bluetoothScan]?.isGranted ?? true;
-    final connectOk = statuses[Permission.bluetoothConnect]?.isGranted ?? true;
-
-    if (!scanOk || !connectOk) {
-      _errorMessage = 'Bluetooth permission denied. Enable Nearby devices '
-          'permission for this app in system settings.';
-      notifyListeners();
-      return false;
+    if ((scan?.isGranted ?? false) && (connect?.isGranted ?? false)) {
+      _permissionsPermanentlyDenied = false;
+      return true;
     }
-    return true;
+
+    // `permanentlyDenied` is only reachable for a permission the OS actually
+    // knows about, so seeing it here proves we are on Android 12+ and the user
+    // has locked us out. Asking for location would be a pointless extra dialog.
+    final lockedOut =
+        (scan?.isPermanentlyDenied ?? false) ||
+        (connect?.isPermanentlyDenied ?? false);
+
+    if (!lockedOut) {
+      // Phase 2 — the Android 11-and-older path.
+      final location = await Permission.locationWhenInUse.request();
+      if (location.isGranted) {
+        _permissionsPermanentlyDenied = false;
+        return true;
+      }
+      _permissionsPermanentlyDenied = location.isPermanentlyDenied;
+    } else {
+      _permissionsPermanentlyDenied = true;
+    }
+
+    _errorMessage = _permissionsPermanentlyDenied
+        ? 'Bluetooth permission is blocked. Open Settings → Permissions and '
+            'allow "Nearby devices" (or "Location" on Android 11 and older), '
+            'then scan again.'
+        : 'Bluetooth permission denied. Allow "Nearby devices" — or '
+            '"Location" on Android 11 and older — to scan for the '
+            '$kDeviceName tool.';
+    notifyListeners();
+    return false;
   }
+
+  /// True when a permission was denied with "don't ask again", so prompting
+  /// again is futile and the user must be sent to system settings.
+  bool get permissionsPermanentlyDenied => _permissionsPermanentlyDenied;
+
+  /// Open this app's system settings page so the user can grant a permission
+  /// that can no longer be requested in-app.
+  Future<void> openSettings() => openAppSettings();
 
   // ===== SCANNING =====
 
@@ -169,26 +210,44 @@ class BleService extends ChangeNotifier {
       }
 
       _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
+        // Keep anything named, plus anything advertising the UART service even
+        // if it arrived nameless. Android caches device names and sometimes
+        // resolves them a beat late; filtering on the name alone can hide the
+        // very device we are looking for.
         _scanResults = results
-            .where((r) => r.device.platformName.isNotEmpty)
+            .where((r) =>
+                r.device.platformName.isNotEmpty || _advertisesUart(r))
             .toList();
         // Surface the tool first — techs shouldn't hunt for it in a list.
         _scanResults.sort((a, b) {
-          final aIsTool = a.device.platformName == kDeviceName ? 0 : 1;
-          final bIsTool = b.device.platformName == kDeviceName ? 0 : 1;
+          final aIsTool = isTool(a) ? 0 : 1;
+          final bIsTool = isTool(b) ? 0 : 1;
           return aIsTool.compareTo(bIsTool);
         });
         notifyListeners();
       });
 
+      // Pass 1: filtered to the UART service, which is the reliable way to find
+      // the tool — Android caches stale device names, so the name is for
+      // display only.
       await FlutterBluePlus.startScan(
         timeout: timeout,
         withServices: [Guid(_serviceUuid)],
       );
+      await _scanFinished();
 
-      // If no devices found with the specific service, scan again without filter
-      if (_scanResults.isEmpty) {
+      // Pass 2: some adapters don't surface 128-bit service UUIDs in the
+      // advertisement, so the filtered pass can come back empty even with the
+      // tool sitting right there. Fall back to an unfiltered sweep.
+      //
+      // This has to wait for pass 1 to actually finish: startScan returns as
+      // soon as scanning *begins*, so testing _scanResults straight after it
+      // always saw an empty list and restarted the scan unfiltered, discarding
+      // the filtered pass every time.
+      if (_scanResults.isEmpty &&
+          _connectionState == BleConnectionState.scanning) {
         await FlutterBluePlus.startScan(timeout: timeout);
+        await _scanFinished();
       }
     } catch (e) {
       _errorMessage = 'Scan failed: ${e.toString()}';
@@ -199,6 +258,23 @@ class BleService extends ChangeNotifier {
       notifyListeners();
     }
   }
+
+  /// True when this advertisement carries the Nordic UART service, i.e. it is
+  /// one of our tools whatever name the OS reports.
+  static bool _advertisesUart(ScanResult r) => r
+      .advertisementData.serviceUuids
+      .any((u) => u.str128.toLowerCase() == _serviceUuid);
+
+  /// Whether a scan result is the diagnostic tool. Checks the advertised
+  /// service first; the name is a fallback because Android caches it.
+  static bool isTool(ScanResult r) =>
+      _advertisesUart(r) || r.device.platformName == kDeviceName;
+
+  /// Completes when the current scan stops — on timeout, or because
+  /// [stopScan] was called. `startScan` itself returns as soon as scanning
+  /// starts, so awaiting it tells you nothing about the results.
+  Future<void> _scanFinished() =>
+      FlutterBluePlus.isScanning.where((scanning) => !scanning).first;
 
   /// Stop scanning
   Future<void> stopScan() async {

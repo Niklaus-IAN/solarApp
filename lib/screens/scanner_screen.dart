@@ -374,7 +374,8 @@ class _ScannerScreenState extends State<ScannerScreen> {
                       ? Center(
                           child: Text(
                             isScanning
-                                ? 'Looking for SolarOBD devices...'
+                                ? 'Looking for ${BleService.kDeviceName} '
+                                    'devices...'
                                 : 'No devices found',
                             style: const TextStyle(
                                 color: AppTheme.textSecondary),
@@ -386,22 +387,25 @@ class _ScannerScreenState extends State<ScannerScreen> {
                           itemBuilder: (ctx, i) {
                             final result = ble.scanResults[i];
                             final name = result.device.platformName;
-                            final isSolarOBD = name.contains('SolarOBD');
+                            // Match on the advertised UART service, not the
+                            // name: the firmware advertises as 'SolarDiag' and
+                            // Android may hand us a stale or empty name.
+                            final isTool = BleService.isTool(result);
 
                             return ListTile(
                               leading: Icon(
                                 Icons.bluetooth,
-                                color: isSolarOBD
+                                color: isTool
                                     ? AppTheme.accentGreen
                                     : AppTheme.textMuted,
                               ),
                               title: Text(
-                                name,
+                                name.isEmpty ? 'Unnamed device' : name,
                                 style: TextStyle(
-                                  color: isSolarOBD
+                                  color: isTool
                                       ? AppTheme.accentGreen
                                       : AppTheme.textPrimary,
-                                  fontWeight: isSolarOBD
+                                  fontWeight: isTool
                                       ? FontWeight.w700
                                       : FontWeight.w400,
                                 ),
@@ -540,11 +544,25 @@ class _ScannerScreenState extends State<ScannerScreen> {
                     color: AppTheme.accentRed.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text(
-                    bleService.errorMessage!,
-                    style: const TextStyle(
-                        color: AppTheme.accentRed, fontSize: 12),
-                    textAlign: TextAlign.center,
+                  child: Column(
+                    children: [
+                      Text(
+                        bleService.errorMessage!,
+                        style: const TextStyle(
+                            color: AppTheme.accentRed, fontSize: 12),
+                        textAlign: TextAlign.center,
+                      ),
+                      // A permanently denied permission cannot be re-requested
+                      // in-app, so give the user the only route that works.
+                      if (bleService.permissionsPermanentlyDenied)
+                        TextButton.icon(
+                          onPressed: bleService.openSettings,
+                          icon: const Icon(Icons.settings, size: 16),
+                          label: const Text('Open Settings'),
+                          style: TextButton.styleFrom(
+                              foregroundColor: AppTheme.accentRed),
+                        ),
+                    ],
                   ),
                 ),
               ],
